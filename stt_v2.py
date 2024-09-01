@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import google.generativeai as genai
 from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
@@ -9,10 +10,15 @@ import json
 import sys
 import traceback
 
+# Load environment variables
+load_dotenv()
 
-# --- Set up API Key and File Paths ---
-os.environ["GEMINI_API_KEY"] = "AIzaSyCnEXqCUlsklCAvdVn5XUTBMjp4mBlSXHA" # Replace with your actual Gemini API key
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+# Set up API Key
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise ValueError("GEMINI_API_KEY not found in environment variables")
+
+genai.configure(api_key=api_key)
 
 file_path = '/Users/pranay/Projects/LLM/video/proj1/data/Chiranjeevi_Video_Dec_21.mp4'  # Update with your file path
 
