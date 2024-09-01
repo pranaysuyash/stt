@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 import google.generativeai as genai
 from moviepy.editor import VideoFileClip
-from pydub import AudioSegment
+from pydub import AudioSegment, silence
 import logging
 import requests
 import time
@@ -11,7 +11,7 @@ import sys
 import traceback
 
 # Load environment variables
-load_dotenv()
+load_dotenv(dotenv_path='/Users/pranay/Projects/LLM/video/proj1/scripts/.env')
 
 # Set up API Key
 api_key = os.getenv("GEMINI_API_KEY")
@@ -614,6 +614,12 @@ def process_chunk(chunk, chunk_num, total_chunks):
     audio_chunk_path = f"chunk_{chunk_num}.wav"
     try:
         chunk.export(audio_chunk_path, format="wav")
+        
+        # Check for silence
+        if is_silence(chunk):
+            logger.info(f"Chunk {chunk_num} is silent, skipping processing")
+            return None
+
         your_file = genai.upload_file(audio_chunk_path)
 
         # Wait for file processing with exponential backoff
@@ -672,8 +678,13 @@ def process_chunk(chunk, chunk_num, total_chunks):
         # logger.info(f"Successfully processed chunk {chunk_num} of {total_chunks}")
         # return chunk_data
         if chunk_data:
-            logger.info(f"Successfully processed chunk {chunk_num} of {total_chunks}")
-            return chunk_data
+            # Add a confidence check
+            if check_confidence(chunk_data):
+                logger.info(f"Successfully processed chunk {chunk_num} of {total_chunks}")
+                return chunk_data
+            else:
+                logger.warning(f"Low confidence in chunk {chunk_num} output, discarding")
+                return None
         else:
             logger.error(f"Failed to extract valid JSON data from response for chunk {chunk_num}")
             return None
@@ -698,9 +709,22 @@ def extract_json_from_response(response):
                 return json.loads(json_text)
             except json.JSONDecodeError:
                 logger.error("Failed to parse JSON from response")
+                logger.error(f"Raw response text: {json_text}")
+    logger.error("Invalid response structure")
+    logger.error(f"Full response: {response}")
     return None
 
-def main(process_all=True, test_chunk_index=None):
+def is_silence(chunk, silence_threshold=-50.0, min_silence_duration=1000):
+    """Check if an audio chunk is silent."""
+    return chunk.dBFS < silence_threshold and len(chunk) >= min_silence_duration
+
+def check_confidence(chunk_data, confidence_threshold=0.7):
+    """Check if the chunk data meets a confidence threshold."""
+    # This is a placeholder function. You'll need to implement your own confidence checking logic
+    # based on the structure of your chunk_data and what you consider to be "confident" output.
+    return True  # For now, always return True
+
+def main(process_all=True, test_chunk_index=None, process_full_audio=False):
     try:
         # --- Load Audio From File ---
         if not os.path.exists(file_path):
@@ -723,7 +747,17 @@ def main(process_all=True, test_chunk_index=None):
         chunks = [audio[i:i + chunk_length_ms] for i in range(0, len(audio), chunk_length_ms)]
         total_chunks = len(chunks)
 
-        if process_all:
+        if process_full_audio:
+            # Process the full audio file
+            logger.info("Processing full audio file")
+            chunk_data = process_chunk(audio, 1, 1)
+            if chunk_data and validate_chunk_data(chunk_data):
+                with open("full_audio_output.json", "w") as outfile:
+                    json.dump(chunk_data, outfile, indent=2)
+                logger.info("Full audio processed. Output saved to 'full_audio_output.json'.")
+            else:
+                logger.error("Failed to process full audio")
+        elif process_all:
             # Process all chunks
             final_output = initialize_final_output()
             for i, chunk in enumerate(chunks, 1):
@@ -738,9 +772,8 @@ def main(process_all=True, test_chunk_index=None):
                     except TypeError as e:
                         logger.error(f"TypeError when processing chunk {i}: {str(e)}")
                         logger.error(f"Problematic chunk_data: {json.dumps(chunk_data, indent=2)}")
-            else:
-                logger.warning(f"Invalid or empty data for chunk {i}/{total_chunks}")
-        
+                else:
+                    logger.warning(f"Invalid or empty data for chunk {i}/{total_chunks}")
 
             consolidated_output = consolidate_final_output(final_output)
             with open("final_consolidated_output.json", "w") as outfile:
@@ -894,15 +927,22 @@ def consolidate_final_output(final_output):
     # Helper function to remove duplicates from a list while preserving order
     def deduplicate(seq):
         seen = set()
-        return [x for x in seq if not (x in seen or seen.add(x))]
+        result = []
+        for item in seq:
+            if item is None:
+                continue
+            if isinstance(item, dict):
+                item_tuple = tuple(sorted(item.items()))
+                if item_tuple not in seen:
+                    seen.add(item_tuple)
+                    result.append(item)
+            elif item not in seen:
+                seen.add(item)
+                result.append(item)
+        return result
 
     # Helper function to merge lists, handling different data types
     def merge_lists(list1, list2):
-        if all(isinstance(i, dict) for i in list1 + list2):
-            combined = {frozenset(item.items()): item for item in list1}
-            for item in list2:
-                combined[frozenset(item.items())] = item
-            return list(combined.values())
         return deduplicate(list1 + list2)
 
     # Helper function to merge dictionaries
@@ -981,7 +1021,12 @@ def consolidate_final_output(final_output):
     return final_output
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        main(process_all=False, test_chunk_index=int(sys.argv[2]))
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "test":
+            main(process_all=False, test_chunk_index=int(sys.argv[2]))
+        elif sys.argv[1] == "full":
+            main(process_all=False, test_chunk_index=None, process_full_audio=True)
+        else:
+            print("Invalid argument. Use 'test <chunk_index>' or 'full' for processing options.")
     else:
         main(process_all=True)
