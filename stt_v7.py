@@ -165,12 +165,16 @@ def extract_and_chunk_audio(file_path, chunk_length_ms=5 * 60 * 1000):
             logger.info(f"Processing audio file: {file_path}")
             audio = AudioSegment.from_file(file_path)
 
+        logger.info(f"Total audio duration: {len(audio) / 1000} seconds")
+
         chunks = []
         for i in range(0, len(audio), chunk_length_ms):
             chunk = audio[i:i + chunk_length_ms]
-            chunks.append(chunk)
-        
-        logger.info(f"Chunked audio into {len(chunks)} pieces, each up to {chunk_length_ms / 60000} minutes long.")
+            if len(chunk) > 0:  # Only add non-empty chunks
+                chunks.append(chunk)
+                logger.info(f"Created chunk {len(chunks)} with duration {len(chunk) / 1000} seconds")
+
+        logger.info(f"Chunked audio into {len(chunks)} pieces, each up to {chunk_length_ms / 1000} seconds long.")
         return chunks
 
     except Exception as e:
@@ -273,22 +277,22 @@ def clean_audio_chunks(chunks, segment_folder):
             continue
     return cleaned_chunks
 
-def visualize_audio_chunks(cleaned_chunks, indices=None):
+def visualize_audio_chunks(chunks, indices=None, title_prefix=""):
     """
-    Visualize waveforms of the specified or all cleaned audio chunks.
+    Visualize waveforms of the specified or all audio chunks.
     """
     try:
         if indices is None:
-            indices = range(1, len(cleaned_chunks) + 1)
+            indices = range(1, len(chunks) + 1)
 
         for i in indices:
-            if 1 <= i <= len(cleaned_chunks):
-                chunk = cleaned_chunks[i - 1]
+            if 1 <= i <= len(chunks):
+                chunk = chunks[i - 1]
                 samples = np.array(chunk.get_array_of_samples())
                 
                 plt.figure(figsize=(10, 4))
                 plt.plot(samples)
-                plt.title(f"Waveform of Cleaned Chunk {i}")
+                plt.title(f"{title_prefix} Waveform of Chunk {i} (Duration: {len(chunk) / 1000:.2f} seconds)")
                 plt.xlabel("Sample Number")
                 plt.ylabel("Amplitude")
                 plt.show()
@@ -311,13 +315,16 @@ for segment_file_path in segments:
     # Extract and chunk audio from each video segment
     chunks = extract_and_chunk_audio(segment_file_path)
 
+    plt.ion()  # Ensure interactive mode is on for displaying plots in VS Code
+    # Visualize all original chunks
+    visualize_audio_chunks(chunks, title_prefix="Original")
+
     # Clean the chunks and save them immediately
     cleaned_chunks = clean_audio_chunks(chunks, segment_folder)
 
-    # Visualize all cleaned chunks for this segment
-    visualize_audio_chunks(cleaned_chunks)
+    
+    # Visualize all cleaned chunks
+    visualize_audio_chunks(cleaned_chunks, title_prefix="Cleaned")
 
-    # No need for separate saving steps as chunks are saved during cleaning
-
-    plt.ion()  # Ensure interactive mode is on for displaying plots in VS Code
+   
 
