@@ -7,6 +7,13 @@ import noisereduce as nr
 import matplotlib
 import matplotlib.pyplot as plt
 
+# Ensure correct import for ffmpeg-python
+try:
+    import ffmpeg as ffmpeg_lib
+except ModuleNotFoundError:
+    logging.error("ffmpeg-python is not installed or not found in the current environment.")
+
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -97,20 +104,55 @@ As an AI assistant specialized in analyzing medical video/audio content, your ta
 Begin your analysis of the provided video content, adhering to these instructions and the specified JSON structure. Ensure your analysis is thorough, objective, and provides valuable insights for both medical professionals and patients.
 """
 
-def extract_and_chunk_audio(file_path, chunk_length_ms=5 * 60 * 1000):
+def segment_large_video(video_path, segment_duration=900):
     """
-    Extracts audio from a video file and chunks it into pieces of specified length.
+    Segments a large video into smaller clips of specified duration using ffmpeg.
+    """
+    try:
+        if not os.path.exists(video_path):
+            logger.error(f"File not found: {video_path}")
+            raise FileNotFoundError(f"File not found: {video_path}")
 
-    :param file_path: Path to the video file.
-    :param chunk_length_ms: Length of each chunk in milliseconds. Default is 5 minutes.
-    :return: List of AudioSegment objects, each representing a chunk of audio.
-    """
+        logger.info(f"Processing video file: {video_path}")
+
+        # Get video information
+        probe = ffmpeg_lib.probe(video_path)
+        video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
+        duration = float(probe['format']['duration'])
+
+        segments = []
+        for start in range(0, int(duration), segment_duration):
+            end = min(start + segment_duration, duration)
+            segment_folder = f"{os.path.splitext(video_path)[0]}_segment_{start}_{end}"
+            os.makedirs(segment_folder, exist_ok=True)
+            segment_path = os.path.join(segment_folder, f"segment_{start}_{end}.mp4")
+            
+            try:
+                (
+                    ffmpeg_lib
+                    .input(video_path, ss=start, t=segment_duration)
+                    .output(segment_path, c='copy')
+                    .overwrite_output()
+                    .run(capture_stdout=True, capture_stderr=True)
+                )
+                segments.append(segment_path)
+                logger.info(f"Segment saved: {segment_path}")
+            except ffmpeg_lib.Error as e:
+                logger.error(f"Error writing segment {start}-{end}: {str(e)}")
+                raise e
+
+        return segments
+
+    except Exception as e:
+        logger.error(f"Error during video segmentation: {str(e)}")
+        raise e
+
+def extract_and_chunk_audio(file_path, chunk_length_ms=5 * 60 * 1000):
     try:
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        # Extract audio from video
         if file_path.endswith(('.mp4', '.mkv', '.avi')):
             logger.info(f"Processing video file: {file_path}")
             clip = VideoFileClip(file_path)
@@ -123,10 +165,12 @@ def extract_and_chunk_audio(file_path, chunk_length_ms=5 * 60 * 1000):
             logger.info(f"Processing audio file: {file_path}")
             audio = AudioSegment.from_file(file_path)
 
-        # Chunk the audio into 5-minute segments
-        chunks = [audio[i:i + chunk_length_ms] for i in range(0, len(audio), chunk_length_ms)]
-        logger.info(f"Chunked audio into {len(chunks)} pieces, each {chunk_length_ms / 60000} minutes long.")
+        chunks = []
+        for i in range(0, len(audio), chunk_length_ms):
+            chunk = audio[i:i + chunk_length_ms]
+            chunks.append(chunk)
         
+        logger.info(f"Chunked audio into {len(chunks)} pieces, each up to {chunk_length_ms / 60000} minutes long.")
         return chunks
 
     except Exception as e:
@@ -136,140 +180,144 @@ def extract_and_chunk_audio(file_path, chunk_length_ms=5 * 60 * 1000):
 def detect_silence_in_chunk(chunk, silence_thresh=-50.0, min_silence_len=1000):
     """
     Detects if a chunk is mostly silent.
-
-    :param chunk: AudioSegment object
-    :param silence_thresh: Silence threshold in dBFS
-    :param min_silence_len: Minimum length of silence in milliseconds to consider it silent
-    :return: Boolean indicating if the chunk is mostly silent
     """
-    silence_chunks = silence.detect_silence(chunk, min_silence_len=min_silence_len, silence_thresh=silence_thresh)
-    total_silence_duration = sum([end - start for start, end in silence_chunks])
-    return total_silence_duration > (len(chunk) * 0.7)  # If more than 70% of the chunk is silent, consider it silent
+    try:
+        silence_chunks = silence.detect_silence(chunk, min_silence_len=min_silence_len, silence_thresh=silence_thresh)
+        total_silence_duration = sum([end - start for start, end in silence_chunks])
+        return total_silence_duration > (len(chunk) * 0.7)  # If more than 70% of the chunk is silent, consider it silent
+    except Exception as e:
+        logger.error(f"Error detecting silence: {str(e)}")
+        raise e
 
 def normalize_audio(chunk):
     """
     Normalize the audio chunk to a target dBFS level.
-
-    :param chunk: AudioSegment object
-    :return: Normalized AudioSegment object
     """
-    target_dBFS = -20.0  # Target level
-    change_in_dBFS = target_dBFS - chunk.dBFS
-    return chunk.apply_gain(change_in_dBFS)
+    try:
+        target_dBFS = -20.0
+        change_in_dBFS = target_dBFS - chunk.dBFS
+        return chunk.apply_gain(change_in_dBFS)
+    except Exception as e:
+        logger.error(f"Error normalizing audio: {str(e)}")
+        raise e
 
 def reduce_noise(chunk):
     """
     Apply noise reduction to an audio chunk.
-
-    :param chunk: AudioSegment object
-    :return: Noise-reduced AudioSegment object
     """
-    samples = np.array(chunk.get_array_of_samples())
     try:
+        samples = np.array(chunk.get_array_of_samples())
         reduced_noise_samples = nr.reduce_noise(y=samples, sr=chunk.frame_rate)
+        reduced_noise_chunk = AudioSegment(
+            reduced_noise_samples.tobytes(),
+            frame_rate=chunk.frame_rate,
+            sample_width=chunk.sample_width,
+            channels=chunk.channels
+        )
+        return reduced_noise_chunk
     except ValueError as e:
         logger.warning(f"Noise reduction issue: {e}. Skipping chunk.")
         return chunk
+    except Exception as e:
+        logger.error(f"Error during noise reduction: {str(e)}")
+        raise e
 
-    reduced_noise_chunk = AudioSegment(
-        reduced_noise_samples.tobytes(),
-        frame_rate=chunk.frame_rate,
-        sample_width=chunk.sample_width,
-        channels=chunk.channels
-    )
-    
-    return reduced_noise_chunk
-
-def save_cleaned_chunks(cleaned_chunks, indices=None, output_dir="cleaned_chunks"):
+def save_cleaned_chunks(cleaned_chunks, segment_folder, indices=None):
     """
-    Save specified or all cleaned audio chunks to the specified directory.
-
-    :param cleaned_chunks: List of cleaned AudioSegment objects
-    :param indices: List of indices specifying which chunks to save (1-based). If None, all chunks will be saved.
-    :param output_dir: Directory where the cleaned chunks will be saved. Default is "cleaned_chunks".
+    Save specified or all cleaned audio chunks to the specified segment folder.
     """
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    try:
+        output_dir = os.path.join(segment_folder, "cleaned_chunks")
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
 
-    # If no indices are specified, save all chunks
-    if indices is None:
-        indices = range(1, len(cleaned_chunks) + 1)
+        if indices is None:
+            indices = range(1, len(cleaned_chunks) + 1)
 
-    for output_index, i in enumerate(indices):
-        if 1 <= i <= len(cleaned_chunks):
-            output_file = os.path.join(output_dir, f"cleaned_chunk_{output_index + 1}.wav")
-            cleaned_chunks[i-1].export(output_file, format="wav")
-            logger.info(f"Cleaned Chunk {output_index + 1} saved as {output_file}")
-        else:
-            logger.warning(f"Index {i} is out of range. No chunk saved for this index.")
+        for output_index, i in enumerate(indices):
+            if 1 <= i <= len(cleaned_chunks):
+                output_file = os.path.join(output_dir, f"cleaned_chunk_{output_index + 1}.wav")
+                cleaned_chunks[i-1].export(output_file, format="wav")
+                logger.info(f"Cleaned Chunk {output_index + 1} saved as {output_file}")
+            else:
+                logger.warning(f"Index {i} is out of range. No chunk saved for this index.")
+    except Exception as e:
+        logger.error(f"Error saving cleaned chunks: {str(e)}")
+        raise e
 
-
-def clean_audio_chunks(chunks):
+def clean_audio_chunks(chunks, segment_folder):
     """
     Clean audio chunks by checking for silence, normalizing, and applying noise reduction.
-    
-    :param chunks: List of AudioSegment objects
-    :return: List of cleaned AudioSegment objects
+    Save each chunk as it's processed.
     """
     cleaned_chunks = []
     for i, chunk in enumerate(chunks):
-        if detect_silence_in_chunk(chunk):
-            logger.info(f"Chunk {i+1} is mostly silent. Skipping.")
+        try:
+            if detect_silence_in_chunk(chunk):
+                logger.info(f"Chunk {i+1} is mostly silent. Skipping.")
+                continue
+
+            chunk = normalize_audio(chunk)
+            chunk = reduce_noise(chunk)
+            
+            # Save the cleaned chunk immediately
+            output_dir = os.path.join(segment_folder, "cleaned_chunks")
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = os.path.join(output_dir, f"cleaned_chunk_{i+1}.wav")
+            chunk.export(output_file, format="wav")
+            
+            cleaned_chunks.append(chunk)
+            logger.info(f"Chunk {i+1} cleaned and saved as {output_file}")
+        except Exception as e:
+            logger.error(f"Error cleaning chunk {i+1}: {str(e)}")
             continue
-
-        chunk = normalize_audio(chunk)
-        chunk = reduce_noise(chunk)
-        cleaned_chunks.append(chunk)
-        logger.info(f"Chunk {i+1} cleaned and ready for processing.")
-
     return cleaned_chunks
 
 def visualize_audio_chunks(cleaned_chunks, indices=None):
     """
     Visualize waveforms of the specified or all cleaned audio chunks.
-
-    :param cleaned_chunks: List of cleaned AudioSegment objects
-    :param indices: List of indices specifying which chunks to visualize (1-based). If None, all chunks will be visualized.
     """
-    if indices is None:
-        indices = range(1, len(cleaned_chunks) + 1)
+    try:
+        if indices is None:
+            indices = range(1, len(cleaned_chunks) + 1)
 
-    for i in indices:
-        if 1 <= i <= len(cleaned_chunks):
-            chunk = cleaned_chunks[i - 1]
-            samples = np.array(chunk.get_array_of_samples())
-            
-            plt.figure(figsize=(10, 4))
-            plt.plot(samples)
-            plt.title(f"Waveform of Cleaned Chunk {i}")
-            plt.xlabel("Sample Number")
-            plt.ylabel("Amplitude")
-            plt.show()
-        else:
-            logger.warning(f"Index {i} is out of range. No visualization available for this index.")
-
+        for i in indices:
+            if 1 <= i <= len(cleaned_chunks):
+                chunk = cleaned_chunks[i - 1]
+                samples = np.array(chunk.get_array_of_samples())
+                
+                plt.figure(figsize=(10, 4))
+                plt.plot(samples)
+                plt.title(f"Waveform of Cleaned Chunk {i}")
+                plt.xlabel("Sample Number")
+                plt.ylabel("Amplitude")
+                plt.show()
+            else:
+                logger.warning(f"Index {i} is out of range. No visualization available for this index.")
+    except Exception as e:
+        logger.error(f"Error visualizing audio chunks: {str(e)}")
+        raise e
+    
 # Example usage
-file_path = '/Users/pranay/Projects/LLM/video/proj1/data/Chiranjeevi_Video_Dec_21.mp4'
-chunks = extract_and_chunk_audio(file_path)
 
-# Clean the chunks
-cleaned_chunks = clean_audio_chunks(chunks)
+# Step 1: Segment the large video file into smaller videos
+video_file_path = '/Users/pranay/Projects/LLM/video/proj1/data/Chiranjeevi_Video_Dec_21.mp4'
+segments = segment_large_video(video_file_path)  # This function should return a list of segmented video file paths
 
-# Example: Save the cleaned chunks separately
-save_cleaned_chunks(cleaned_chunks)
+# Step 2: Process each video segment individually
+for segment_file_path in segments:
+    segment_folder = os.path.dirname(segment_file_path)
+    
+    # Extract and chunk audio from each video segment
+    chunks = extract_and_chunk_audio(segment_file_path)
 
-# Example: Visualize the cleaned chunks
-visualize_audio_chunks(cleaned_chunks)
+    # Clean the chunks and save them immediately
+    cleaned_chunks = clean_audio_chunks(chunks, segment_folder)
 
-# Save specific chunks (e.g., chunks 1 and 3)
-save_cleaned_chunks(cleaned_chunks, indices=[1, 3])
+    # Visualize all cleaned chunks for this segment
+    visualize_audio_chunks(cleaned_chunks)
 
-plt.ion()
-# Visualize specific chunks (e.g., chunks 1 and 3)
-visualize_audio_chunks(cleaned_chunks, indices=[1, 3])
+    # No need for separate saving steps as chunks are saved during cleaning
 
-# Save a single chunk (e.g., chunk 2)
-save_cleaned_chunks(cleaned_chunks, indices=[2])
+    plt.ion()  # Ensure interactive mode is on for displaying plots in VS Code
 
-# Visualize a single chunk (e.g., chunk 2)
-visualize_audio_chunks(cleaned_chunks, indices=[2])
