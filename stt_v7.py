@@ -4,8 +4,13 @@ from pydub import AudioSegment, silence
 import logging
 import numpy as np
 import noisereduce as nr
-import matplotlib
 import matplotlib.pyplot as plt
+import google.generativeai as genai
+import json
+from dotenv import load_dotenv
+from datetime import datetime
+from io import BytesIO
+import tempfile
 
 # Ensure correct import for ffmpeg-python
 try:
@@ -18,6 +23,14 @@ except ModuleNotFoundError:
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+# Load environment variables and configure Gemini
+load_dotenv(dotenv_path='/Users/pranay/Projects/LLM/video/proj1/scripts/.env')
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise ValueError("GEMINI_API_KEY not found in environment variables")
+genai.configure(api_key=api_key)
 
 # --- System Prompt ---
 system_prompt = """
@@ -102,6 +115,12 @@ As an AI assistant specialized in analyzing medical video/audio content, your ta
 {instructions for handling long content and splitting into parts}
 
 Begin your analysis of the provided video content, adhering to these instructions and the specified JSON structure. Ensure your analysis is thorough, objective, and provides valuable insights for both medical professionals and patients.
+"""
+
+full_prompt_template = """
+{user_prompt}
+
+{assistant_prompt}
 """
 
 def segment_large_video(video_path, segment_duration=900):
@@ -302,13 +321,84 @@ def visualize_audio_chunks(chunks, indices=None, title_prefix=""):
         logger.error(f"Error visualizing audio chunks: {str(e)}")
         raise e
     
-# Example usage
 
-# Step 1: Segment the large video file into smaller videos
+def transcribe_chunk_with_gemini(model, cleaned_chunk, full_prompt_template):
+    """Transcribe an audio chunk using Gemini."""
+    try:
+        # Create a temporary file to store the audio chunk
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
+            cleaned_chunk.export(temp_audio_file.name, format="wav")
+            temp_audio_path = temp_audio_file.name
+
+        # Upload the temporary audio file to Gemini
+        uploaded_file = genai.upload_file(path=temp_audio_path)
+
+        # Generate content with the uploaded file using appropriate prompts
+        response = model.generate_content(
+            [full_prompt_template, uploaded_file]
+        )
+
+        # Return the raw API response
+        return response.text
+    
+    except Exception as e:
+        logger.error(f"Error transcribing audio chunk: {str(e)}")
+        return None
+    
+    # finally:
+    #     # Clean up the temporary file
+    #     os.remove(temp_audio_path)
+
+
+def process_chunks_with_gemini(model, cleaned_chunks, full_prompt_template):
+    raw_outputs = []
+    
+    for chunk in cleaned_chunks:
+        raw_output = transcribe_chunk_with_gemini(model, chunk, full_prompt_template)
+        if raw_output:
+            raw_outputs.append(raw_output)
+    
+    return raw_outputs
+
+def save_transcription_output(raw_outputs, segment_folder):
+    try:
+        # Save the raw output
+        raw_output_path = os.path.join(segment_folder, "raw_transcription_output.json")
+        with open(raw_output_path, 'w') as f:
+            json.dump(raw_outputs, f, indent=4)
+        logger.info(f"Raw transcription output saved as {raw_output_path}")
+
+        # Optional: Create a formatted JSON structure
+        formatted_output = {
+            "transcriptions": raw_outputs,
+            "metadata": {
+                "total_chunks": len(raw_outputs),
+                "generated_on": str(datetime.now())
+            }
+        }
+
+        formatted_output_path = os.path.join(segment_folder, "formatted_transcription_output.json")
+        with open(formatted_output_path, 'w') as f:
+            json.dump(formatted_output, f, indent=4)
+        logger.info(f"Formatted transcription output saved as {formatted_output_path}")
+
+    except Exception as e:
+        logger.error(f"Error saving transcription output: {str(e)}")
+        raise e
+
+# Initialize the Gemini model
+model = genai.GenerativeModel(
+    model_name='gemini-1.5-pro-exp-0827',
+    tools=[],
+    system_instruction=system_prompt
+)
+# chat = model.start_chat(enable_automatic_function_calling=True)
+
+# Segment the large video file into smaller videos
 video_file_path = '/Users/pranay/Projects/LLM/video/proj1/data/Chiranjeevi_Video_Dec_21.mp4'
-segments = segment_large_video(video_file_path)  # This function should return a list of segmented video file paths
+segments = segment_large_video(video_file_path)
 
-# Step 2: Process each video segment individually
+# Process each video segment individually and Save both raw and formatted transcription outputs
 for segment_file_path in segments:
     segment_folder = os.path.dirname(segment_file_path)
     
@@ -321,10 +411,13 @@ for segment_file_path in segments:
 
     # Clean the chunks and save them immediately
     cleaned_chunks = clean_audio_chunks(chunks, segment_folder)
-
     
     # Visualize all cleaned chunks
     visualize_audio_chunks(cleaned_chunks, title_prefix="Cleaned")
-
-   
+    
+    # Process transcriptions for each cleaned chunk
+    raw_outputs = process_chunks_with_gemini(model, cleaned_chunks, full_prompt_template)
+    
+    # Save both raw and formatted transcription outputs
+    save_transcription_output(raw_outputs, segment_folder)
 
