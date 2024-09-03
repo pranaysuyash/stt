@@ -34,94 +34,38 @@ genai.configure(api_key=api_key)
 
 # --- System Prompt ---
 system_prompt = """
-You are an AI assistant with specialized expertise in analyzing medical and health-related video/audio content. Your primary objective is to extract, organize, and analyze critical information such as medical details, patient interactions, and healthcare procedures. You possess in-depth knowledge of medical terminology, communication best practices, and the latest advancements in medical science.
+You are an AI assistant specialized in transcribing medical consultations from audio/video content. Your task is to provide an accurate, verbatim transcription of the conversation, including speaker identification and timestamps.
+Key Responsibilities:
 
-Your mission is to analyze the provided video/audio content and generate a structured report in JSON format. This report will be integrated into a frontend application, allowing users to explore high-level summaries and perform in-depth analyses of key individuals and elements mentioned in the content.
+Transcribe all speech content accurately.
+Identify speakers (e.g., Doctor, Patient, Nurse).
+Include timestamps at regular intervals or when the speaker changes.
+Note any significant non-verbal sounds (e.g., coughing, long pauses, background noises) that may be relevant to understanding the context.
+
+Do not provide any analysis, summaries, or additional information beyond the transcription itself.
 """
-
 # --- User Prompt ---
 user_prompt = """
-Analyze the following medical consultation recording. Ensure that all participant names, including patients, doctors, and others, are accurately captured. Structure the information to allow users to easily navigate summaries and deep-dive into individual details. Provide the output in a JSON format following the specified guidelines.
-
+Please transcribe the following medical consultation recording:
 <video_content>
-{VIDEO_CONTENT}
+{{VIDEO_CONTENT}}
 </video_content>
+Provide your transcription in the following JSON format:
+{
+  "transcription": [
+    {
+      "timestamp": "MM:SS",
+      "speaker": "SPEAKER_ROLE",
+      "text": "SPOKEN_TEXT",
+      "non_verbal": "NON_VERBAL_SOUNDS (if any)"
+    },
+    ...
+  ]
+}
 
-<user_preferences>
-{USER_PREFERENCES}
-</user_preferences>
+Ensure your transcription is thorough and captures all spoken content. If there are parts of the audio that are unclear or inaudible, indicate this in the transcription.
 """
 
-# --- Assistant Prompt ---
-assistant_prompt = """
-As an AI assistant specialized in analyzing medical video/audio content, your task is to provide a comprehensive analysis of the given content. Follow these detailed instructions:
-
-### Key Responsibilities:
-1. **Transcription and Diarization:** Accurately transcribe speech content with high accuracy, including speaker diarization.
-2. **Medical Entity Recognition:** Identify, categorize, and contextualize medical entities, conditions, and terminology.
-3. **Diagnosis and Treatment Analysis:** Recognize and interpret medical diagnoses, treatments, and recommendations, including their certainty levels and potential implications.
-4. **Emotional and Interpersonal Dynamics:** Assess emotional content, interpersonal dynamics, and communication effectiveness in medical conversations.
-5. **Metadata and Context Extraction:** Extract and organize relevant metadata and contextual information from the audio/video content.
-6. **Summarization:** Provide clear, concise, and accurate summaries of medical discussions while maintaining the nuances of the original content.
-7. **Interaction Quality Assessment:** Analyze the quality and appropriateness of healthcare provider-patient interactions.
-8. **Cultural and Socioeconomic Considerations:** Identify potential cultural, socioeconomic, or linguistic factors that may influence the medical discussion or treatment plans.
-9. **Urgency and Red Flags:** Recognize and highlight any urgent medical situations, critical information, or potential red flags in the content.
-10. **Quality of Care and Best Practices:** Provide insights into the overall quality of care and adherence to medical best practices based on the analyzed content.
-
-### Guidelines:
-1. **Confidentiality:** Maintain strict confidentiality and adhere to HIPAA standards for all medical information. Include patient and doctor names as provided, but ensure security in data handling.
-2. **Language and Clarity:** Use professional, clear, and grammatically correct language in all outputs.
-3. **Objectivity:** Provide objective analysis without personal opinions or medical advice.
-4. **Balanced Communication:** Balance technical accuracy with accessibility when explaining medical terms, ensuring the output is understandable to both medical professionals and general audiences.
-5. **Urgency:** Highlight any urgent medical situations or critical information prominently in your analysis.
-6. **Structured Output:** Format all output in the specified JSON structure for consistency and ease of processing.
-7. **Standardized Codes:** When referencing medical conditions, symptoms, procedures, or medications, include relevant standardized codes (ICD-10, SNOMED CT, RxNorm, CPT/HCPCS) where applicable.
-8. **Continuity in Extensive Analysis:** If the analysis is too extensive for a single output, split it into multiple responses, ensuring each response is a valid JSON object and clearly indicating the continuation sequence.
-9. **Cross-Referencing:** Continuously cross-reference information throughout the analysis to identify patterns, inconsistencies, or notable correlations.
-10. **Multidisciplinary Perspective:** Approach the analysis with a multidisciplinary perspective, considering not only the immediate medical content but also potential psychosocial, environmental, and lifestyle factors that may influence the patient's health.
-
-### Additional Considerations:
-1. **Scalability and Large Video Handling:**
-   - For large video/audio files, segment the content into smaller, manageable parts and process each segment independently while maintaining context across segments.
-   - Prioritize the extraction of the most critical information in each segment, ensuring continuity in the analysis across multiple segments.
-
-2. **Error Handling and Edge Cases:**
-   - Handle unclear audio, incomplete data, or conflicting information by flagging these sections in the JSON output for review.
-   - Include disclaimers in the output indicating the need for further human review when necessary.
-
-3. **Security and Data Protection:**
-   - Ensure all data handling, storage, and transmission processes follow best practices for security, including encryption of sensitive information.
-   - Include a section in the JSON output that logs any potential security or privacy concerns encountered during processing.
-
-4. **Customization and User Preferences:**
-   - Allow for user customization of the analysis, specifying areas of focus (e.g., emotional analysis, in-depth medical entity recognition) or adjusting the level of detail in the output (e.g., summary vs. full analysis).
-   - Include a section in the JSON output that indicates the user-specified preferences and any custom settings applied during the analysis.
-
-5. **Localization and Cultural Sensitivity:**
-   - Implement localization capabilities to recognize and interpret medical terms in different languages, and adjust the analysis to account for cultural differences in healthcare practices.
-   - Include a cultural competence assessment in the output, identifying any cultural, linguistic, or socioeconomic factors that influence the interaction and assessing the healthcare provider's sensitivity to these factors.
-
-6. **Front-End Integration Considerations:**
-   - Ensure that the JSON output is structured to facilitate easy integration with the frontend application. The JSON should be modular, allowing different sections to be displayed independently or in combination as needed by the user interface.
-   - Consider including metadata in the JSON that can guide the frontend in prioritizing or highlighting specific sections, such as critical medical information or urgent flags.
-
-### Analysis Components:
-{detailed components as per your provided instructions}
-
-### JSON Output Structure:
-{full JSON structure as previously defined}
-
-### Instructions for Handling Long Content and Output:
-{instructions for handling long content and splitting into parts}
-
-Begin your analysis of the provided video content, adhering to these instructions and the specified JSON structure. Ensure your analysis is thorough, objective, and provides valuable insights for both medical professionals and patients.
-"""
-
-full_prompt_template = """
-{user_prompt}
-
-{assistant_prompt}
-"""
 
 def segment_large_video(video_path, segment_duration=900):
     """
@@ -279,7 +223,11 @@ def clean_audio_chunks(chunks, segment_folder):
             if detect_silence_in_chunk(chunk):
                 logger.info(f"Chunk {i+1} is mostly silent. Skipping.")
                 continue
-
+            
+            # Check if chunk is less than 1 second
+            if len(chunk) < 1000:  # Length is in milliseconds
+                logger.info(f"Chunk {i+1} is less than 1 second long. Skipping.")
+                continue
             chunk = normalize_audio(chunk)
             chunk = reduce_noise(chunk)
             
@@ -322,7 +270,7 @@ def visualize_audio_chunks(chunks, indices=None, title_prefix=""):
         raise e
     
 
-def transcribe_chunk_with_gemini(model, cleaned_chunk, full_prompt_template):
+def transcribe_chunk_with_gemini(model, cleaned_chunk, user_prompt):
     """Transcribe an audio chunk using Gemini."""
     try:
         # Create a temporary file to store the audio chunk
@@ -335,7 +283,7 @@ def transcribe_chunk_with_gemini(model, cleaned_chunk, full_prompt_template):
 
         # Generate content with the uploaded file using appropriate prompts
         response = model.generate_content(
-            [full_prompt_template, uploaded_file]
+            [user_prompt, uploaded_file]
         )
 
         # Return the raw API response
@@ -350,15 +298,55 @@ def transcribe_chunk_with_gemini(model, cleaned_chunk, full_prompt_template):
     #     os.remove(temp_audio_path)
 
 
-def process_chunks_with_gemini(model, cleaned_chunks, full_prompt_template):
+def process_chunks_with_gemini(model, cleaned_chunks, user_prompt):
     raw_outputs = []
     
     for chunk in cleaned_chunks:
-        raw_output = transcribe_chunk_with_gemini(model, chunk, full_prompt_template)
+        raw_output = transcribe_chunk_with_gemini(model, chunk, user_prompt)
         if raw_output:
             raw_outputs.append(raw_output)
     
     return raw_outputs
+
+def extract_json_parts(json_data, parent_key=''):
+    """
+    Recursively extracts all parts from inside a JSON structure and returns them,
+    maintaining array structures with numerical indices.
+    
+    Args:
+        json_data (dict or list): The JSON data structure to parse.
+        parent_key (str): The base string for nested keys.
+        
+    Returns:
+        dict: A dictionary with all keys and their corresponding values.
+    """
+    parts = {}
+
+    if isinstance(json_data, dict):
+        for key, value in json_data.items():
+            full_key = f"{parent_key}.{key}" if parent_key else key
+            if isinstance(value, (dict, list)):
+                parts.update(extract_json_parts(value, full_key))
+            else:
+                parts[full_key] = value
+
+    elif isinstance(json_data, list):
+        for index, item in enumerate(json_data):
+            full_key = f"{parent_key}[{index}]"
+            if isinstance(item, str) and item.strip().startswith("```json"):
+                try:
+                    json_str = item.strip().removeprefix("```json").removesuffix("```").strip()
+                    parsed_json = json.loads(json_str)
+                    parts.update(extract_json_parts(parsed_json, full_key))
+                except json.JSONDecodeError as e:
+                    logger.error(f"Error parsing JSON from string at {full_key}: {str(e)}")
+                    parts[full_key] = item  # Fall back to storing the raw string
+            elif isinstance(item, (dict, list)):
+                parts.update(extract_json_parts(item, full_key))
+            else:
+                parts[full_key] = item
+
+    return parts
 
 def save_transcription_output(raw_outputs, segment_folder):
     try:
@@ -368,7 +356,7 @@ def save_transcription_output(raw_outputs, segment_folder):
             json.dump(raw_outputs, f, indent=4)
         logger.info(f"Raw transcription output saved as {raw_output_path}")
 
-        # Optional: Create a formatted JSON structure
+        # Create a formatted JSON structure
         formatted_output = {
             "transcriptions": raw_outputs,
             "metadata": {
@@ -382,10 +370,16 @@ def save_transcription_output(raw_outputs, segment_folder):
             json.dump(formatted_output, f, indent=4)
         logger.info(f"Formatted transcription output saved as {formatted_output_path}")
 
+        # Extract data from the raw output and save it as extracted_data.json
+        extracted_data = extract_json_parts(raw_outputs)
+        extracted_data_path = os.path.join(segment_folder, "extracted_data.json")
+        with open(extracted_data_path, 'w') as f:
+            json.dump(extracted_data, f, indent=4)
+        logger.info(f"Extracted data saved as {extracted_data_path}")
+        
     except Exception as e:
         logger.error(f"Error saving transcription output: {str(e)}")
         raise e
-
 # Initialize the Gemini model
 model = genai.GenerativeModel(
     model_name='gemini-1.5-pro-exp-0827',
@@ -398,14 +392,16 @@ model = genai.GenerativeModel(
 video_file_path = '/Users/pranay/Projects/LLM/video/proj1/data/Chiranjeevi_Video_Dec_21.mp4'
 segments = segment_large_video(video_file_path)
 
-# Process each video segment individually and Save both raw and formatted transcription outputs
+# Process each video segment individually and save both raw, formatted transcription outputs, and extracted data
 for segment_file_path in segments:
-    segment_folder = os.path.dirname(segment_file_path)
+    segment_folder = os.path.splitext(segment_file_path)[0]
+    os.makedirs(segment_folder, exist_ok=True)
     
     # Extract and chunk audio from each video segment
     chunks = extract_and_chunk_audio(segment_file_path)
 
     plt.ion()  # Ensure interactive mode is on for displaying plots in VS Code
+    
     # Visualize all original chunks
     visualize_audio_chunks(chunks, title_prefix="Original")
 
@@ -416,8 +412,7 @@ for segment_file_path in segments:
     visualize_audio_chunks(cleaned_chunks, title_prefix="Cleaned")
     
     # Process transcriptions for each cleaned chunk
-    raw_outputs = process_chunks_with_gemini(model, cleaned_chunks, full_prompt_template)
+    raw_outputs = process_chunks_with_gemini(model, cleaned_chunks, user_prompt)
     
-    # Save both raw and formatted transcription outputs
+    # Save both raw and formatted transcription outputs, then extract and save extracted data
     save_transcription_output(raw_outputs, segment_folder)
-
