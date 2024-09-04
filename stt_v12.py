@@ -40,7 +40,6 @@ def save_json_to_file(data, filepath, description):
     except Exception as e:
         logger.error(f"Error saving {description}: {str(e)}")
 
-
 # --- Step 1: Video Segmentation ---
 def segment_large_video(video_path, segment_duration=1800):
     """
@@ -267,21 +266,30 @@ def main(video_file_path, hf_token):
         for cleaned_chunk_path in tqdm(cleaned_chunk_paths, desc="Processing cleaned chunks"):
             transcription_result = transcribe_with_whisperx(cleaned_chunk_path, whisper_model)
 
+            # Save the raw transcription result to a file
+            transcription_file = os.path.join(segment_folder, f"transcription_chunk_{os.path.basename(cleaned_chunk_path)}.json")
+            save_json_to_file(transcription_result, transcription_file, "Raw transcription result")
+            
             # Step 8: Align transcriptions with word-level timestamps
             aligned_transcription = align_with_whisperx(transcription_result, cleaned_chunk_path, whisper_model)
+
+            # Save the aligned transcription result to a file
+            alignment_file = os.path.join(segment_folder, f"aligned_transcription_chunk_{os.path.basename(cleaned_chunk_path)}.json")
+            save_json_to_file(aligned_transcription, alignment_file, "Aligned transcription result")
 
             # Step 9: Perform speaker diarization
             diarization_segments = diarize_with_whisperx(cleaned_chunk_path, hf_token)
 
-            if diarization_segments:
-                # Step 10: Assign speaker labels to transcription
-                final_result = assign_speakers_to_transcription(diarization_segments, aligned_transcription)
+            # Save the diarization result to a file
+            diarization_file = os.path.join(segment_folder, f"diarization_chunk_{os.path.basename(cleaned_chunk_path)}.json")
+            save_json_to_file(diarization_segments, diarization_file, "Diarization result")
 
-                # Save final result to a file
-                final_result_file = os.path.join(segment_folder, f"final_transcription_with_speakers_chunk_{os.path.basename(cleaned_chunk_path)}.json")
-                with open(final_result_file, 'w') as f:
-                    json.dump(final_result, f, indent=4)
-                logger.info(f"Final transcription with speakers saved as {final_result_file}")
+            # Step 10: Assign speaker labels to transcription
+            final_result = assign_speakers_to_transcription(diarization_segments, aligned_transcription)
+
+            # Save the final transcription with speaker labels
+            final_result_file = os.path.join(segment_folder, f"final_transcription_with_speakers_chunk_{os.path.basename(cleaned_chunk_path)}.json")
+            save_json_to_file(final_result, final_result_file, "Final transcription with speakers")
 
 if __name__ == "__main__":
     video_file_path = '/Users/pranay/Projects/LLM/video/proj1/data/Chiranjeevi_Video_Dec_21.mp4'
