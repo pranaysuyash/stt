@@ -9,6 +9,7 @@ import whisperx
 import torch
 from tqdm import tqdm
 import json
+import pandas as pd  # Ensure this is imported for DataFrame handling
 
 # Ensure correct import for ffmpeg-python
 try:
@@ -34,6 +35,10 @@ whisper_model = whisperx.load_model("large-v2", device, compute_type=compute_typ
 # Utility function to save JSON data
 def save_json_to_file(data, filepath, description):
     try:
+        # Convert DataFrame to a list of dicts if necessary
+        if isinstance(data, pd.DataFrame):
+            data = data.to_dict(orient='records')
+        
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=4)
         logger.info(f"{description} saved as {filepath}")
@@ -42,9 +47,6 @@ def save_json_to_file(data, filepath, description):
 
 # --- Step 1: Video Segmentation ---
 def segment_large_video(video_path, segment_duration=1800):
-    """
-    Segments a large video into smaller clips of specified duration using ffmpeg.
-    """
     try:
         if not os.path.exists(video_path):
             logger.error(f"File not found: {video_path}")
@@ -78,7 +80,6 @@ def segment_large_video(video_path, segment_duration=1800):
 
 # --- Step 2: Audio Extraction ---
 def extract_audio_from_segment(video_path):
-    """Extract audio from video segment."""
     logger.info(f"Extracting audio from {video_path}...")
     audio_output = "temp_audio.wav"
     clip = VideoFileClip(video_path)
@@ -88,14 +89,10 @@ def extract_audio_from_segment(video_path):
 
 # --- Step 3: Remove Silence ---
 def remove_silence(audio_path, silence_thresh=-40, min_silence_len=500, padding=300):
-    """
-    Remove silent parts from audio. This step should happen only once after extracting the audio.
-    """
     logger.info(f"Removing silence from audio file: {audio_path}...")
     sound = AudioSegment.from_file(audio_path, format="wav")
     non_silent_segments = silence.detect_nonsilent(sound, min_silence_len=min_silence_len, silence_thresh=silence_thresh)
     
-    # Join non-silent segments with some padding
     cleaned_audio = AudioSegment.silent(duration=0)
     for start, end in non_silent_segments:
         cleaned_audio += sound[start-padding:end+padding]
@@ -107,9 +104,6 @@ def remove_silence(audio_path, silence_thresh=-40, min_silence_len=500, padding=
 
 # --- Step 4: Chunk Audio ---
 def chunk_audio(cleaned_audio_path, chunk_length_ms=1800_000):  # 1800 seconds = 30 minutes
-    """
-    Chunk the audio after silence removal.
-    """
     logger.info(f"Chunking audio file: {cleaned_audio_path} into {chunk_length_ms // 1000 // 60} minute chunks...")
     sound = AudioSegment.from_file(cleaned_audio_path)
     chunks = [sound[i:i + chunk_length_ms] for i in range(0, len(sound), chunk_length_ms)]
@@ -123,17 +117,12 @@ def chunk_audio(cleaned_audio_path, chunk_length_ms=1800_000):  # 1800 seconds =
 
 # --- Step 5: Normalize and Reduce Noise ---
 def normalize_and_reduce_noise(chunk):
-    """
-    Normalize and apply noise reduction to a single audio chunk.
-    """
     logger.info(f"Normalizing and reducing noise for audio chunk...")
     try:
-        # Normalize the chunk
         target_dBFS = -20.0
         change_in_dBFS = target_dBFS - chunk.dBFS
         normalized_chunk = chunk.apply_gain(change_in_dBFS)
 
-        # Apply noise reduction
         samples = np.array(normalized_chunk.get_array_of_samples())
         reduced_noise_samples = nr.reduce_noise(y=samples, sr=normalized_chunk.frame_rate)
         reduced_noise_chunk = AudioSegment(
@@ -151,9 +140,6 @@ def normalize_and_reduce_noise(chunk):
 
 # --- Step 6: Save Cleaned Chunks ---
 def save_cleaned_chunks(cleaned_chunks, segment_folder):
-    """
-    Save all cleaned audio chunks to the specified folder and return their file paths.
-    """
     logger.info(f"Saving cleaned audio chunks to {segment_folder}...")
     try:
         output_dir = os.path.join(segment_folder, "cleaned_chunks")
@@ -173,10 +159,6 @@ def save_cleaned_chunks(cleaned_chunks, segment_folder):
 
 # --- Step 7: WhisperX Transcription ---
 def transcribe_with_whisperx(audio_file_path, whisper_model, batch_size=16):
-    """
-    Transcribe the audio using WhisperX. 
-    We directly pass the audio file path.
-    """
     logger.info(f"Transcribing audio chunk: {audio_file_path} using WhisperX...")
     
     # Load audio
@@ -192,10 +174,6 @@ def transcribe_with_whisperx(audio_file_path, whisper_model, batch_size=16):
 
 # --- Step 8: WhisperX Alignment ---
 def align_with_whisperx(result, audio_file_path, whisper_model):
-    """
-    Align the transcription results with word-level timestamps using WhisperX.
-    We directly pass the audio file path.
-    """
     logger.info(f"Aligning transcription for {audio_file_path}...")
     
     # Load alignment model
@@ -209,10 +187,6 @@ def align_with_whisperx(result, audio_file_path, whisper_model):
 
 # --- Step 9: WhisperX Diarization ---
 def diarize_with_whisperx(audio_file_path, hf_token):
-    """
-    Perform speaker diarization on the audio file.
-    We directly pass the audio file path.
-    """
     logger.info(f"Performing speaker diarization for {audio_file_path}...")
     try:
         diarization_model = whisperx.DiarizationPipeline(use_auth_token=hf_token, device=device)
@@ -221,6 +195,12 @@ def diarize_with_whisperx(audio_file_path, hf_token):
         diarization_segments = diarization_model(audio_file_path)
         
         logger.info(f"Diarization completed for {audio_file_path}.")
+        
+        # Convert diarization segments to a JSON-serializable format if needed
+        if isinstance(diarization_segments, pd.DataFrame):
+            diarization_segments = diarization_segments.to_dict(orient='records')
+        
+        logger.info(f"Diarization segments converted for {audio_file_path}.")
         return diarization_segments
     except Exception as e:
         logger.error(f"Error during diarization: {str(e)}")
@@ -232,9 +212,13 @@ def assign_speakers_to_transcription(diarization_segments, aligned_transcription
     Assign speaker labels to the transcription segments.
     """
     logger.info(f"Assigning speaker labels to transcription segments...")
-    result_with_speakers = whisperx.assign_word_speakers(diarization_segments, aligned_transcription)
-    logger.info(f"Speaker labels assigned.")
-    return result_with_speakers
+    try:
+        result_with_speakers = whisperx.assign_word_speakers(diarization_segments, aligned_transcription)
+        logger.info(f"Speaker labels assigned.")
+        return result_with_speakers
+    except Exception as e:
+        logger.error(f"Error during speaker assignment: {str(e)}")
+        return aligned_transcription
 
 # --- Main Processing Flow ---
 def main(video_file_path, hf_token):
