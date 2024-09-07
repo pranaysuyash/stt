@@ -170,6 +170,10 @@ def transcribe_with_whisperx(audio_file_path, whisper_model, batch_size=16):
     # Print the raw segments before alignment
     logger.info(f"Initial transcription result for {audio_file_path}: {result['segments']}")
     
+    # Save the raw transcription result immediately
+    transcription_file = os.path.splitext(audio_file_path)[0] + "_raw_transcription.json"
+    save_json_to_file(result, transcription_file, "Raw transcription result")
+
     return result
 
 # --- Step 8: WhisperX Alignment ---
@@ -183,7 +187,11 @@ def align_with_whisperx(result, audio_file_path, whisper_model):
     aligned_result = whisperx.align(result["segments"], model_a, metadata, audio_file_path, device)
     
     logger.info(f"Alignment completed for {audio_file_path}.")
-    return aligned_result
+    # Save the aligned transcription result
+    alignment_file = os.path.splitext(audio_file_path)[0] + "_aligned_transcription.json"
+    save_json_to_file(aligned_result, alignment_file, "Aligned transcription result")
+
+    return aligned_result   
 
 # --- Step 9: WhisperX Diarization ---
 def diarize_with_whisperx(audio_file_path, hf_token):
@@ -196,15 +204,24 @@ def diarize_with_whisperx(audio_file_path, hf_token):
         
         logger.info(f"Diarization completed for {audio_file_path}.")
         
-        # Convert diarization segments to a JSON-serializable format if needed
-        if isinstance(diarization_segments, pd.DataFrame):
-            diarization_segments = diarization_segments.to_dict(orient='records')
+        # Convert diarization segments to a JSON-serializable format
+        diarization_result = [
+            {
+                "start": segment['start'],
+                "end": segment['end'],
+                "speaker": segment['speaker']
+            }
+            for segment in diarization_segments if isinstance(segment, dict)
+        ]
         
         logger.info(f"Diarization segments converted for {audio_file_path}.")
-        return diarization_segments
+        return diarization_result
+    
     except Exception as e:
         logger.error(f"Error during diarization: {str(e)}")
         return None
+
+
 
 # --- Step 10: WhisperX Speaker Assignment ---
 def assign_speakers_to_transcription(diarization_segments, aligned_transcription):

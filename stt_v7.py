@@ -67,7 +67,7 @@ Ensure your transcription is thorough and captures all spoken content. If there 
 """
 
 
-def segment_large_video(video_path, segment_duration=900):
+def segment_large_video(video_path, segment_duration=1800):
     """
     Segments a large video into smaller clips of specified duration using ffmpeg.
     """
@@ -110,7 +110,7 @@ def segment_large_video(video_path, segment_duration=900):
         logger.error(f"Error during video segmentation: {str(e)}")
         raise e
 
-def extract_and_chunk_audio(file_path, chunk_length_ms=5 * 60 * 1000):
+def extract_and_chunk_audio(file_path, chunk_length_ms=30 * 60 * 1000):
     try:
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
